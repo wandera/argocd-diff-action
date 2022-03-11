@@ -1698,6 +1698,7 @@ const ARGOCD_SERVER_URL = core.getInput('argocd-server-url');
 const ARGOCD_TOKEN = core.getInput('argocd-token');
 const VERSION = core.getInput('argocd-version');
 const EXTRA_CLI_ARGS = core.getInput('argocd-extra-cli-args');
+const INSECURE = core.getInput('insecure');
 const octokit = github.getOctokit(githubToken);
 function execCommand(command, options = {}) {
     return __awaiter(this, void 0, void 0, function* () {
@@ -1726,14 +1727,14 @@ function scrubSecrets(input) {
     }
     return output;
 }
-function setupArgoCDCommand() {
+function setupArgoCDCommand(insecure) {
     return __awaiter(this, void 0, void 0, function* () {
         const argoBinaryPath = 'bin/argo';
         yield tc.downloadTool(`https://github.com/argoproj/argo-cd/releases/download/${VERSION}/argocd-${ARCH}-amd64`, argoBinaryPath);
         fs.chmodSync(path.join(argoBinaryPath), '755');
         // core.addPath(argoBinaryPath);
         return (params) => __awaiter(this, void 0, void 0, function* () {
-            return execCommand(`${argoBinaryPath} ${params} --auth-token=${ARGOCD_TOKEN} --server=${ARGOCD_SERVER_URL} ${EXTRA_CLI_ARGS}`);
+            return execCommand(`${argoBinaryPath} ${params} ${insecure} --auth-token=${ARGOCD_TOKEN} --server=${ARGOCD_SERVER_URL} ${EXTRA_CLI_ARGS}`);
         });
     });
 }
@@ -1842,9 +1843,14 @@ function asyncForEach(array, callback) {
 }
 function run() {
     return __awaiter(this, void 0, void 0, function* () {
-        const argocd = yield setupArgoCDCommand();
+        let argoInsecure = '';
+        if (INSECURE === 'true') {
+            process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
+            argoInsecure = '--insecure';
+        }
         const apps = yield getApps();
         core.info(`Found apps: ${apps.map(a => a.metadata.name).join(', ')}`);
+        const argocd = yield setupArgoCDCommand(argoInsecure);
         const diffs = [];
         yield asyncForEach(apps, (app) => __awaiter(this, void 0, void 0, function* () {
             const command = `app diff ${app.metadata.name} --local=${app.spec.source.path}`;

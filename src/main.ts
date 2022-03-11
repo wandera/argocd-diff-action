@@ -37,6 +37,7 @@ const ARGOCD_SERVER_URL = core.getInput('argocd-server-url');
 const ARGOCD_TOKEN = core.getInput('argocd-token');
 const VERSION = core.getInput('argocd-version');
 const EXTRA_CLI_ARGS = core.getInput('argocd-extra-cli-args');
+const INSECURE = core.getInput('insecure');
 
 const octokit = github.getOctokit(githubToken);
 
@@ -67,7 +68,9 @@ function scrubSecrets(input: string): string {
   return output;
 }
 
-async function setupArgoCDCommand(): Promise<(params: string) => Promise<ExecResult>> {
+async function setupArgoCDCommand(
+  insecure: string
+): Promise<(params: string) => Promise<ExecResult>> {
   const argoBinaryPath = 'bin/argo';
   await tc.downloadTool(
     `https://github.com/argoproj/argo-cd/releases/download/${VERSION}/argocd-${ARCH}-amd64`,
@@ -79,7 +82,7 @@ async function setupArgoCDCommand(): Promise<(params: string) => Promise<ExecRes
 
   return async (params: string) =>
     execCommand(
-      `${argoBinaryPath} ${params} --auth-token=${ARGOCD_TOKEN} --server=${ARGOCD_SERVER_URL} ${EXTRA_CLI_ARGS}`
+      `${argoBinaryPath} ${params} ${insecure} --auth-token=${ARGOCD_TOKEN} --server=${ARGOCD_SERVER_URL} ${EXTRA_CLI_ARGS}`
     );
 }
 
@@ -206,14 +209,21 @@ async function asyncForEach<T>(
 }
 
 async function run(): Promise<void> {
-  const argocd = await setupArgoCDCommand();
+  let argoInsecure = '';
+  if (INSECURE === 'true') {
+    process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
+    argoInsecure = '--insecure';
+  }
   const apps = await getApps();
   core.info(`Found apps: ${apps.map(a => a.metadata.name).join(', ')}`);
+
+  const argocd = await setupArgoCDCommand(argoInsecure);
 
   const diffs: Diff[] = [];
 
   await asyncForEach(apps, async app => {
     const command = `app diff ${app.metadata.name} --local=${app.spec.source.path}`;
+
     try {
       core.info(`Running: argocd ${command}`);
       // ArgoCD app diff will exit 1 if there is a diff, so always catch,
