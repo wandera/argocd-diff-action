@@ -105,7 +105,10 @@ async function getApps(): Promise<App[]> {
     return (
       app.spec.source.repoURL.includes(
         `${github.context.repo.owner}/${github.context.repo.repo}`
-      ) && (app.spec.source.targetRevision === 'master' || app.spec.source.targetRevision === 'main')
+      ) &&
+      (app.spec.source.targetRevision === 'master' ||
+        app.spec.source.targetRevision === 'main' ||
+        app.spec.source.targetRevision === 'HEAD')
     );
   });
 }
@@ -222,7 +225,7 @@ async function run(): Promise<void> {
   const diffs: Diff[] = [];
 
   await asyncForEach(apps, async app => {
-    const command = `app diff ${app.metadata.name} --local=${app.spec.source.path}`;
+    const command = `app diff ${app.metadata.name} --revision=${github.context.payload.pull_request?.head?.sha}`;
 
     try {
       core.info(`Running: argocd ${command}`);

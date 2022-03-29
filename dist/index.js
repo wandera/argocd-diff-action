@@ -1755,7 +1755,10 @@ function getApps() {
             core.error(e);
         }
         return responseJson.items.filter(app => {
-            return (app.spec.source.repoURL.includes(`${github.context.repo.owner}/${github.context.repo.repo}`) && (app.spec.source.targetRevision === 'master' || app.spec.source.targetRevision === 'main'));
+            return (app.spec.source.repoURL.includes(`${github.context.repo.owner}/${github.context.repo.repo}`) &&
+                (app.spec.source.targetRevision === 'master' ||
+                    app.spec.source.targetRevision === 'main' ||
+                    app.spec.source.targetRevision === 'HEAD'));
         });
     });
 }
@@ -1853,7 +1856,8 @@ function run() {
         const argocd = yield setupArgoCDCommand(argoInsecure);
         const diffs = [];
         yield asyncForEach(apps, (app) => __awaiter(this, void 0, void 0, function* () {
-            const command = `app diff ${app.metadata.name} --local=${app.spec.source.path}`;
+            var _a, _b;
+            const command = `app diff ${app.metadata.name} --revision=${(_b = (_a = github.context.payload.pull_request) === null || _a === void 0 ? void 0 : _a.head) === null || _b === void 0 ? void 0 : _b.sha}`;
             try {
                 core.info(`Running: argocd ${command}`);
                 // ArgoCD app diff will exit 1 if there is a diff, so always catch,
