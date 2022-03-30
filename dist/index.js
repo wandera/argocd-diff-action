@@ -1659,6 +1659,100 @@ exports.debug = debug; // for test
 
 /***/ }),
 
+/***/ 158:
+/***/ (function(module, __unusedexports, __webpack_require__) {
+
+"use strict";
+
+const pTry = __webpack_require__(162);
+
+const pLimit = concurrency => {
+	if (!((Number.isInteger(concurrency) || concurrency === Infinity) && concurrency > 0)) {
+		return Promise.reject(new TypeError('Expected `concurrency` to be a number from 1 and up'));
+	}
+
+	const queue = [];
+	let activeCount = 0;
+
+	const next = () => {
+		activeCount--;
+
+		if (queue.length > 0) {
+			queue.shift()();
+		}
+	};
+
+	const run = async (fn, resolve, ...args) => {
+		activeCount++;
+
+		// TODO: Get rid of `pTry`. It's not needed anymore.
+		const result = pTry(fn, ...args);
+
+		resolve(result);
+
+		try {
+			await result;
+		} catch {}
+
+		next();
+	};
+
+	const enqueue = (fn, resolve, ...args) => {
+		queue.push(run.bind(null, fn, resolve, ...args));
+
+		(async () => {
+			// This function needs to wait until the next microtask before comparing
+			// `activeCount` to `concurrency`, because `activeCount` is updated asynchronously
+			// when the run function is dequeued and called. The comparison in the if-statement
+			// needs to happen asynchronously as well to get an up-to-date value for `activeCount`.
+			await Promise.resolve();
+
+			if (activeCount < concurrency && queue.length > 0) {
+				queue.shift()();
+			}
+		})();
+	};
+
+	const generator = (fn, ...args) => new Promise(resolve => enqueue(fn, resolve, ...args));
+	Object.defineProperties(generator, {
+		activeCount: {
+			get: () => activeCount
+		},
+		pendingCount: {
+			get: () => queue.length
+		},
+		clearQueue: {
+			value: () => {
+				queue.length = 0;
+			}
+		}
+	});
+
+	return generator;
+};
+
+module.exports = pLimit;
+
+
+/***/ }),
+
+/***/ 162:
+/***/ (function(module) {
+
+"use strict";
+
+
+const pTry = (fn, ...arguments_) => new Promise(resolve => {
+	resolve(fn(...arguments_));
+});
+
+module.exports = pTry;
+// TODO: remove this in the next major version
+module.exports.default = pTry;
+
+
+/***/ }),
+
 /***/ 198:
 /***/ (function(__unusedmodule, exports, __webpack_require__) {
 
@@ -1691,6 +1785,7 @@ const github = __importStar(__webpack_require__(469));
 const fs = __importStar(__webpack_require__(747));
 const path = __importStar(__webpack_require__(622));
 const node_fetch_1 = __importDefault(__webpack_require__(454));
+const p_limit_1 = __importDefault(__webpack_require__(158));
 const ARCH = process.env.ARCH || 'linux';
 const githubToken = core.getInput('github-token');
 core.info(githubToken);
@@ -1765,6 +1860,7 @@ function getApps() {
 function postDiffComment(diffs) {
     var _a, _b;
     return __awaiter(this, void 0, void 0, function* () {
+        core.info('postDiffComment');
         const { owner, repo } = github.context.repo;
         const sha = (_b = (_a = github.context.payload.pull_request) === null || _a === void 0 ? void 0 : _a.head) === null || _b === void 0 ? void 0 : _b.sha;
         const commitLink = `https://github.com/${owner}/${repo}/pull/${github.context.issue.number}/commits/${sha}`;
@@ -1837,13 +1933,6 @@ _Updated at ${new Date().toLocaleString('en-US', { timeZone: 'America/Los_Angele
         }
     });
 }
-function asyncForEach(array, callback) {
-    return __awaiter(this, void 0, void 0, function* () {
-        for (let index = 0; index < array.length; index++) {
-            yield callback(array[index], index, array);
-        }
-    });
-}
 function run() {
     return __awaiter(this, void 0, void 0, function* () {
         let argoInsecure = '';
@@ -1854,33 +1943,41 @@ function run() {
         const apps = yield getApps();
         core.info(`Found apps: ${apps.map(a => a.metadata.name).join(', ')}`);
         const argocd = yield setupArgoCDCommand(argoInsecure);
-        const diffs = [];
-        yield asyncForEach(apps, (app) => __awaiter(this, void 0, void 0, function* () {
-            var _a, _b;
-            const command = `app diff ${app.metadata.name} --revision=${(_b = (_a = github.context.payload.pull_request) === null || _a === void 0 ? void 0 : _a.head) === null || _b === void 0 ? void 0 : _b.sha}`;
-            try {
-                core.info(`Running: argocd ${command}`);
-                // ArgoCD app diff will exit 1 if there is a diff, so always catch,
-                // and then consider it a success if there's a diff in stdout
-                // https://github.com/argoproj/argo-cd/issues/3588
-                yield argocd(command);
-            }
-            catch (e) {
-                const res = e;
-                core.info(`stdout: ${res.stdout}`);
-                core.info(`stderr: ${res.stderr}`);
-                if (res.stdout) {
-                    diffs.push({ app, diff: res.stdout });
+        const limit = p_limit_1.default(20);
+        let diffs = [];
+        const input = [];
+        apps.forEach(app => {
+            input.push(limit(() => __awaiter(this, void 0, void 0, function* () {
+                var _a, _b;
+                const command = `app diff ${app.metadata.name} --revision=${(_b = (_a = github.context.payload.pull_request) === null || _a === void 0 ? void 0 : _a.head) === null || _b === void 0 ? void 0 : _b.sha}`;
+                try {
+                    core.info(`Running: argocd ${command}`);
+                    // ArgoCD app diff will exit 1 if there is a diff, so always catch,
+                    // and then consider it a success if there's a diff in stdout
+                    // https://github.com/argoproj/argo-cd/issues/3588
+                    yield argocd(command);
                 }
-                else {
-                    diffs.push({
-                        app,
-                        diff: '',
-                        error: e
-                    });
+                catch (e) {
+                    const res = e;
+                    core.info(`stdout: ${res.stdout}`);
+                    core.info(`stderr: ${res.stderr}`);
+                    if (res.stdout) {
+                        diffs.push({ app, diff: res.stdout });
+                    }
+                    else {
+                        diffs.push({
+                            app,
+                            diff: '',
+                            error: e
+                        });
+                    }
                 }
-            }
-        }));
+            })));
+        });
+        yield Promise.all(input);
+        diffs = diffs.sort((a, b) => {
+            return a.app.metadata.name.localeCompare(b.app.metadata.name);
+        });
         yield postDiffComment(diffs);
         const diffsWithErrors = diffs.filter(d => d.error);
         if (diffsWithErrors.length) {
