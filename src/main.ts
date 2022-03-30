@@ -5,6 +5,7 @@ import * as github from '@actions/github';
 import * as fs from 'fs';
 import * as path from 'path';
 import nodeFetch from 'node-fetch';
+import pLimit from 'p-limit';
 
 interface ExecResult {
   err?: Error | undefined;
@@ -119,6 +120,7 @@ interface Diff {
   error?: ExecResult;
 }
 async function postDiffComment(diffs: Diff[]): Promise<void> {
+  core.info('postDiffComment');
   const { owner, repo } = github.context.repo;
   const sha = github.context.payload.pull_request?.head?.sha;
 
@@ -202,15 +204,6 @@ _Updated at ${new Date().toLocaleString('en-US', { timeZone: 'America/Los_Angele
   }
 }
 
-async function asyncForEach<T>(
-  array: T[],
-  callback: (item: T, i: number, arr: T[]) => Promise<void>
-): Promise<void> {
-  for (let index = 0; index < array.length; index++) {
-    await callback(array[index], index, array);
-  }
-}
-
 async function run(): Promise<void> {
   let argoInsecure = '';
   if (INSECURE === 'true') {
@@ -222,32 +215,44 @@ async function run(): Promise<void> {
 
   const argocd = await setupArgoCDCommand(argoInsecure);
 
-  const diffs: Diff[] = [];
+  const limit = pLimit(20);
 
-  await asyncForEach(apps, async app => {
-    const command = `app diff ${app.metadata.name} --revision=${github.context.payload.pull_request?.head?.sha}`;
-
-    try {
-      core.info(`Running: argocd ${command}`);
-      // ArgoCD app diff will exit 1 if there is a diff, so always catch,
-      // and then consider it a success if there's a diff in stdout
-      // https://github.com/argoproj/argo-cd/issues/3588
-      await argocd(command);
-    } catch (e) {
-      const res = e as ExecResult;
-      core.info(`stdout: ${res.stdout}`);
-      core.info(`stderr: ${res.stderr}`);
-      if (res.stdout) {
-        diffs.push({ app, diff: res.stdout });
-      } else {
-        diffs.push({
-          app,
-          diff: '',
-          error: e
-        });
-      }
-    }
+  let diffs: Diff[] = [];
+  const input: Promise<void>[] = [];
+  apps.forEach(app => {
+    input.push(
+      limit(async () => {
+        const command = `app diff ${app.metadata.name} --revision=${github.context.payload.pull_request?.head?.sha}`;
+        try {
+          core.info(`Running: argocd ${command}`);
+          // ArgoCD app diff will exit 1 if there is a diff, so always catch,
+          // and then consider it a success if there's a diff in stdout
+          // https://github.com/argoproj/argo-cd/issues/3588
+          await argocd(command);
+        } catch (e) {
+          const res = e as ExecResult;
+          core.info(`stdout: ${res.stdout}`);
+          core.info(`stderr: ${res.stderr}`);
+          if (res.stdout) {
+            diffs.push({ app, diff: res.stdout });
+          } else {
+            diffs.push({
+              app,
+              diff: '',
+              error: e
+            });
+          }
+        }
+      })
+    );
   });
+
+  await Promise.all(input);
+
+  diffs = diffs.sort((a, b) => {
+    return a.app.metadata.name.localeCompare(b.app.metadata.name);
+  });
+
   await postDiffComment(diffs);
   const diffsWithErrors = diffs.filter(d => d.error);
   if (diffsWithErrors.length) {
