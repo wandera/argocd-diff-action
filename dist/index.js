@@ -1794,6 +1794,7 @@ const ARGOCD_TOKEN = core.getInput('argocd-token');
 const VERSION = core.getInput('argocd-version');
 const EXTRA_CLI_ARGS = core.getInput('argocd-extra-cli-args');
 const INSECURE = core.getInput('insecure');
+const CONCURRENCY = core.getInput('concurrency');
 const octokit = github.getOctokit(githubToken);
 function execCommand(command, options = {}) {
     return __awaiter(this, void 0, void 0, function* () {
@@ -1860,7 +1861,6 @@ function getApps() {
 function postDiffComment(diffs) {
     var _a, _b;
     return __awaiter(this, void 0, void 0, function* () {
-        core.info('postDiffComment');
         const { owner, repo } = github.context.repo;
         const sha = (_b = (_a = github.context.payload.pull_request) === null || _a === void 0 ? void 0 : _a.head) === null || _b === void 0 ? void 0 : _b.sha;
         const commitLink = `https://github.com/${owner}/${repo}/pull/${github.context.issue.number}/commits/${sha}`;
@@ -1943,7 +1943,7 @@ function run() {
         const apps = yield getApps();
         core.info(`Found apps: ${apps.map(a => a.metadata.name).join(', ')}`);
         const argocd = yield setupArgoCDCommand(argoInsecure);
-        const limit = p_limit_1.default(20);
+        const limit = p_limit_1.default(Number(CONCURRENCY));
         let diffs = [];
         const input = [];
         apps.forEach(app => {
@@ -1975,9 +1975,7 @@ function run() {
             })));
         });
         yield Promise.all(input);
-        diffs = diffs.sort((a, b) => {
-            return a.app.metadata.name.localeCompare(b.app.metadata.name);
-        });
+        diffs = diffs.sort((a, b) => a.app.metadata.name.localeCompare(b.app.metadata.name));
         yield postDiffComment(diffs);
         const diffsWithErrors = diffs.filter(d => d.error);
         if (diffsWithErrors.length) {

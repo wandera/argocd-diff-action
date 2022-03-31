@@ -39,6 +39,7 @@ const ARGOCD_TOKEN = core.getInput('argocd-token');
 const VERSION = core.getInput('argocd-version');
 const EXTRA_CLI_ARGS = core.getInput('argocd-extra-cli-args');
 const INSECURE = core.getInput('insecure');
+const CONCURRENCY = core.getInput('concurrency');
 
 const octokit = github.getOctokit(githubToken);
 
@@ -120,7 +121,6 @@ interface Diff {
   error?: ExecResult;
 }
 async function postDiffComment(diffs: Diff[]): Promise<void> {
-  core.info('postDiffComment');
   const { owner, repo } = github.context.repo;
   const sha = github.context.payload.pull_request?.head?.sha;
 
@@ -215,7 +215,7 @@ async function run(): Promise<void> {
 
   const argocd = await setupArgoCDCommand(argoInsecure);
 
-  const limit = pLimit(20);
+  const limit = pLimit(Number(CONCURRENCY));
 
   let diffs: Diff[] = [];
   const input: Promise<void>[] = [];
@@ -249,9 +249,7 @@ async function run(): Promise<void> {
 
   await Promise.all(input);
 
-  diffs = diffs.sort((a, b) => {
-    return a.app.metadata.name.localeCompare(b.app.metadata.name);
-  });
+  diffs = diffs.sort((a, b) => a.app.metadata.name.localeCompare(b.app.metadata.name));
 
   await postDiffComment(diffs);
   const diffsWithErrors = diffs.filter(d => d.error);
