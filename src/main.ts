@@ -5,6 +5,7 @@ import * as github from '@actions/github';
 import * as fs from 'fs';
 import * as path from 'path';
 import nodeFetch from 'node-fetch';
+import pLimit from 'p-limit';
 
 interface ExecResult {
   err?: Error | undefined;
@@ -37,6 +38,8 @@ const ARGOCD_SERVER_URL = core.getInput('argocd-server-url');
 const ARGOCD_TOKEN = core.getInput('argocd-token');
 const VERSION = core.getInput('argocd-version');
 const EXTRA_CLI_ARGS = core.getInput('argocd-extra-cli-args');
+const INSECURE = core.getInput('insecure');
+const CONCURRENCY = core.getInput('concurrency');
 
 const octokit = github.getOctokit(githubToken);
 
@@ -67,7 +70,9 @@ function scrubSecrets(input: string): string {
   return output;
 }
 
-async function setupArgoCDCommand(): Promise<(params: string) => Promise<ExecResult>> {
+async function setupArgoCDCommand(
+  insecure: string
+): Promise<(params: string) => Promise<ExecResult>> {
   const argoBinaryPath = 'bin/argo';
   await tc.downloadTool(
     `https://github.com/argoproj/argo-cd/releases/download/${VERSION}/argocd-${ARCH}-amd64`,
@@ -79,7 +84,7 @@ async function setupArgoCDCommand(): Promise<(params: string) => Promise<ExecRes
 
   return async (params: string) =>
     execCommand(
-      `${argoBinaryPath} ${params} --auth-token=${ARGOCD_TOKEN} --server=${ARGOCD_SERVER_URL} ${EXTRA_CLI_ARGS}`
+      `${argoBinaryPath} ${params} ${insecure} --auth-token=${ARGOCD_TOKEN} --server=${ARGOCD_SERVER_URL} ${EXTRA_CLI_ARGS}`
     );
 }
 
@@ -102,7 +107,10 @@ async function getApps(): Promise<App[]> {
     return (
       app.spec.source.repoURL.includes(
         `${github.context.repo.owner}/${github.context.repo.repo}`
-      ) && (app.spec.source.targetRevision === 'master' || app.spec.source.targetRevision === 'main')
+      ) &&
+      (app.spec.source.targetRevision === 'master' ||
+        app.spec.source.targetRevision === 'main' ||
+        app.spec.source.targetRevision === 'HEAD')
     );
   });
 }
@@ -196,45 +204,53 @@ _Updated at ${new Date().toLocaleString('en-US', { timeZone: 'America/Los_Angele
   }
 }
 
-async function asyncForEach<T>(
-  array: T[],
-  callback: (item: T, i: number, arr: T[]) => Promise<void>
-): Promise<void> {
-  for (let index = 0; index < array.length; index++) {
-    await callback(array[index], index, array);
-  }
-}
-
 async function run(): Promise<void> {
-  const argocd = await setupArgoCDCommand();
+  let argoInsecure = '';
+  if (INSECURE === 'true') {
+    process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
+    argoInsecure = '--insecure';
+  }
   const apps = await getApps();
   core.info(`Found apps: ${apps.map(a => a.metadata.name).join(', ')}`);
 
-  const diffs: Diff[] = [];
+  const argocd = await setupArgoCDCommand(argoInsecure);
 
-  await asyncForEach(apps, async app => {
-    const command = `app diff ${app.metadata.name} --local=${app.spec.source.path}`;
-    try {
-      core.info(`Running: argocd ${command}`);
-      // ArgoCD app diff will exit 1 if there is a diff, so always catch,
-      // and then consider it a success if there's a diff in stdout
-      // https://github.com/argoproj/argo-cd/issues/3588
-      await argocd(command);
-    } catch (e) {
-      const res = e as ExecResult;
-      core.info(`stdout: ${res.stdout}`);
-      core.info(`stderr: ${res.stderr}`);
-      if (res.stdout) {
-        diffs.push({ app, diff: res.stdout });
-      } else {
-        diffs.push({
-          app,
-          diff: '',
-          error: e
-        });
-      }
-    }
+  const limit = pLimit(Number(CONCURRENCY));
+
+  let diffs: Diff[] = [];
+  const input: Promise<void>[] = [];
+  apps.forEach(app => {
+    input.push(
+      limit(async () => {
+        const command = `app diff ${app.metadata.name} --revision=${github.context.payload.pull_request?.head?.sha}`;
+        try {
+          core.info(`Running: argocd ${command}`);
+          // ArgoCD app diff will exit 1 if there is a diff, so always catch,
+          // and then consider it a success if there's a diff in stdout
+          // https://github.com/argoproj/argo-cd/issues/3588
+          await argocd(command);
+        } catch (e) {
+          const res = e as ExecResult;
+          core.info(`stdout: ${res.stdout}`);
+          core.info(`stderr: ${res.stderr}`);
+          if (res.stdout) {
+            diffs.push({ app, diff: res.stdout });
+          } else {
+            diffs.push({
+              app,
+              diff: '',
+              error: e
+            });
+          }
+        }
+      })
+    );
   });
+
+  await Promise.all(input);
+
+  diffs = diffs.sort((a, b) => a.app.metadata.name.localeCompare(b.app.metadata.name));
+
   await postDiffComment(diffs);
   const diffsWithErrors = diffs.filter(d => d.error);
   if (diffsWithErrors.length) {

@@ -19,6 +19,14 @@ inputs:
     description: Extra arguments to pass to the argocd CLI
     default: --grpc-web
     required: false
+  insecure:
+    description: Do not verify TLS certificate authority
+    default: "false"
+    required: false
+  concurrency:
+    description: No. of concurrent runs
+    default: "20"
+    required: false
 runs:
   using: 'node12'
   main: 'dist/index.js'
