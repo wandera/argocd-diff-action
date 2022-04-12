@@ -40,6 +40,7 @@ const VERSION = core.getInput('argocd-version');
 const EXTRA_CLI_ARGS = core.getInput('argocd-extra-cli-args');
 const INSECURE = core.getInput('insecure');
 const CONCURRENCY = core.getInput('concurrency');
+const RETRY = core.getInput('retry');
 
 const octokit = github.getOctokit(githubToken);
 
@@ -222,25 +223,34 @@ async function run(): Promise<void> {
   apps.forEach(app => {
     input.push(
       limit(async () => {
+        let retry = Number(RETRY);
+
         const command = `app diff ${app.metadata.name} --revision=${github.context.payload.pull_request?.head?.sha}`;
-        try {
-          core.info(`Running: argocd ${command}`);
-          // ArgoCD app diff will exit 1 if there is a diff, so always catch,
-          // and then consider it a success if there's a diff in stdout
-          // https://github.com/argoproj/argo-cd/issues/3588
-          await argocd(command);
-        } catch (e) {
-          const res = e as ExecResult;
-          core.info(`stdout: ${res.stdout}`);
-          core.info(`stderr: ${res.stderr}`);
-          if (res.stdout) {
-            diffs.push({ app, diff: res.stdout });
-          } else {
-            diffs.push({
-              app,
-              diff: '',
-              error: e
-            });
+
+        while (retry > 0) {
+          try {
+            core.info(`Running: argocd ${command}`);
+            // ArgoCD app diff will exit 1 if there is a diff, so always catch,
+            // and then consider it a success if there's a diff in stdout
+            // https://github.com/argoproj/argo-cd/issues/3588
+            await argocd(command);
+            retry = 0;
+          } catch (e) {
+            const res = e as ExecResult;
+            core.info(`stdout: ${res.stdout}`);
+            core.info(`stderr: ${res.stderr}`);
+            if (res.stdout) {
+              diffs.push({ app, diff: res.stdout });
+              retry = 0;
+            } else {
+              core.info(`error: ${retry} attepmpts left`);
+              retry--;
+              diffs.push({
+                app,
+                diff: '',
+                error: e
+              });
+            }
           }
         }
       })
