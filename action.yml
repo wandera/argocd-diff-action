@@ -27,6 +27,14 @@ inputs:
     description: No. of concurrent runs
     default: "20"
     required: false
+  retry-count:
+    description: No. of retries in case of unsuccessfull argocd diffs
+    default: "1"
+    required: false
+  retry-delay:
+    description: Delay before retry argocd diff in seconds
+    default: "10"
+    required: false
 runs:
   using: 'node12'
   main: 'dist/index.js'

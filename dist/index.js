@@ -1795,6 +1795,8 @@ const VERSION = core.getInput('argocd-version');
 const EXTRA_CLI_ARGS = core.getInput('argocd-extra-cli-args');
 const INSECURE = core.getInput('insecure');
 const CONCURRENCY = core.getInput('concurrency');
+const RETRY_COUNT = core.getInput('retry-count');
+const RETRY_DELAY = core.getInput('retry-delay');
 const octokit = github.getOctokit(githubToken);
 function execCommand(command, options = {}) {
     return __awaiter(this, void 0, void 0, function* () {
@@ -1950,26 +1952,33 @@ function run() {
             input.push(limit(() => __awaiter(this, void 0, void 0, function* () {
                 var _a, _b;
                 const command = `app diff ${app.metadata.name} --revision=${(_b = (_a = github.context.payload.pull_request) === null || _a === void 0 ? void 0 : _a.head) === null || _b === void 0 ? void 0 : _b.sha}`;
-                try {
-                    core.info(`Running: argocd ${command}`);
-                    // ArgoCD app diff will exit 1 if there is a diff, so always catch,
-                    // and then consider it a success if there's a diff in stdout
-                    // https://github.com/argoproj/argo-cd/issues/3588
-                    yield argocd(command);
-                }
-                catch (e) {
-                    const res = e;
-                    core.info(`stdout: ${res.stdout}`);
-                    core.info(`stderr: ${res.stderr}`);
-                    if (res.stdout) {
-                        diffs.push({ app, diff: res.stdout });
+                for (let retry = 0; retry < Number(RETRY_COUNT); retry++) {
+                    try {
+                        core.info(`Running (${retry + 1}/${RETRY_COUNT}): argocd ${command}`);
+                        // ArgoCD app diff will exit 1 if there is a diff, so always catch,
+                        // and then consider it a success if there's a diff in stdout
+                        // https://github.com/argoproj/argo-cd/issues/3588
+                        yield argocd(command);
+                        break;
                     }
-                    else {
-                        diffs.push({
-                            app,
-                            diff: '',
-                            error: e
-                        });
+                    catch (e) {
+                        const res = e;
+                        core.info(`stdout (${app.metadata.name}): ${res.stdout}`);
+                        core.info(`stderr (${app.metadata.name}): ${res.stderr}`);
+                        if (res.stdout) {
+                            diffs.push({ app, diff: res.stdout });
+                            break;
+                        }
+                        else {
+                            yield new Promise(f => setTimeout(f, Number(RETRY_DELAY)));
+                            if (retry + 1 === Number(RETRY_COUNT)) {
+                                diffs.push({
+                                    app,
+                                    diff: '',
+                                    error: e
+                                });
+                            }
+                        }
                     }
                 }
             })));
