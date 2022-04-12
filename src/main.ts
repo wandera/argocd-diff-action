@@ -40,7 +40,8 @@ const VERSION = core.getInput('argocd-version');
 const EXTRA_CLI_ARGS = core.getInput('argocd-extra-cli-args');
 const INSECURE = core.getInput('insecure');
 const CONCURRENCY = core.getInput('concurrency');
-const RETRY = core.getInput('retry');
+const RETRY_COUNT = core.getInput('retry-count');
+const RETRY_DELAY = core.getInput('retry-delay');
 
 const octokit = github.getOctokit(githubToken);
 
@@ -223,33 +224,34 @@ async function run(): Promise<void> {
   apps.forEach(app => {
     input.push(
       limit(async () => {
-        let retry = Number(RETRY);
-
         const command = `app diff ${app.metadata.name} --revision=${github.context.payload.pull_request?.head?.sha}`;
 
-        while (retry > 0) {
+        for (let retry = 0; retry < Number(RETRY_COUNT); retry++) {
           try {
-            core.info(`Running: argocd ${command}`);
+            core.info(
+              `${app.metadata.name} Running (${retry + 1}/${RETRY_COUNT}): argocd ${command}`
+            );
             // ArgoCD app diff will exit 1 if there is a diff, so always catch,
             // and then consider it a success if there's a diff in stdout
             // https://github.com/argoproj/argo-cd/issues/3588
             await argocd(command);
-            retry = 0;
+            break;
           } catch (e) {
             const res = e as ExecResult;
-            core.info(`stdout: ${res.stdout}`);
-            core.info(`stderr: ${res.stderr}`);
+            core.info(`${app.metadata.name} stdout: ${res.stdout}`);
+            core.info(`${app.metadata.name} stderr: ${res.stderr}`);
             if (res.stdout) {
               diffs.push({ app, diff: res.stdout });
-              retry = 0;
+              break;
             } else {
-              core.info(`error: ${retry} attepmpts left`);
-              retry--;
-              diffs.push({
-                app,
-                diff: '',
-                error: e
-              });
+              await new Promise(f => setTimeout(f, Number(RETRY_DELAY)));
+              if (retry + 1 === Number(RETRY_COUNT)) {
+                diffs.push({
+                  app,
+                  diff: '',
+                  error: e
+                });
+              }
             }
           }
         }
