@@ -228,9 +228,7 @@ async function run(): Promise<void> {
 
         for (let retry = 0; retry < Number(RETRY_COUNT); retry++) {
           try {
-            core.info(
-              `${app.metadata.name} Running (${retry + 1}/${RETRY_COUNT}): argocd ${command}`
-            );
+            core.info(`Running (${retry + 1}/${RETRY_COUNT}): argocd ${command}`);
             // ArgoCD app diff will exit 1 if there is a diff, so always catch,
             // and then consider it a success if there's a diff in stdout
             // https://github.com/argoproj/argo-cd/issues/3588
@@ -238,8 +236,8 @@ async function run(): Promise<void> {
             break;
           } catch (e) {
             const res = e as ExecResult;
-            core.info(`${app.metadata.name} stdout: ${res.stdout}`);
-            core.info(`${app.metadata.name} stderr: ${res.stderr}`);
+            core.info(`stdout (${app.metadata.name}): ${res.stdout}`);
+            core.info(`stderr (${app.metadata.name}): ${res.stderr}`);
             if (res.stdout) {
               diffs.push({ app, diff: res.stdout });
               break;
