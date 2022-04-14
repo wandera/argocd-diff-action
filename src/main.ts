@@ -242,14 +242,15 @@ async function run(): Promise<void> {
               diffs.push({ app, diff: res.stdout });
               break;
             } else {
-              await new Promise(f => setTimeout(f, Number(RETRY_DELAY)));
               if (retry === Number(RETRY_COUNT)) {
                 diffs.push({
                   app,
                   diff: '',
                   error: e
                 });
+                break;
               }
+              await new Promise(f => setTimeout(f, Number(RETRY_DELAY)));
             }
           }
         }

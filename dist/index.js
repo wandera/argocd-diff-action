@@ -1970,14 +1970,15 @@ function run() {
                             break;
                         }
                         else {
-                            yield new Promise(f => setTimeout(f, Number(RETRY_DELAY)));
                             if (retry === Number(RETRY_COUNT)) {
                                 diffs.push({
                                     app,
                                     diff: '',
                                     error: e
                                 });
+                                break;
                             }
+                            yield new Promise(f => setTimeout(f, Number(RETRY_DELAY)));
                         }
                     }
                 }
